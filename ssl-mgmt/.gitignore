@@ -1,0 +1,33 @@
+# SSL Manager - Git Ignore File
+
+# Log files
+logs/*.log
+*.log
+
+# Backup files
+backups/*
+!backups/.gitkeep
+
+# Generated nginx configurations
+nginx/*
+!nginx/.gitkeep
+
+# Domain configuration (may contain sensitive info)
+config/domains.conf
+
+# SSL credentials (NEVER commit these!)
+config/*.ini
+*.ini
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Keep directory structure
+!.gitkeep
