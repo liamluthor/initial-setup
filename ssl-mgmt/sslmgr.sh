@@ -394,10 +394,35 @@ renew_certificates() {
         if [ "$challenge" = "http-01" ]; then
             certbot_cmd+=" --webroot --webroot-path /var/www/html"
         elif [ "$challenge" = "dns-01" ]; then
-            # This would require DNS plugin configuration
-            warn "DNS-01 challenge requires DNS provider plugin - skipping for now"
-            echo "$domains|$challenge|$cert_path|$expiry|$last_renewed|$status" >> "$temp_conf"
-            continue
+            # DNS-01 requires manual DNS configuration or DNS provider plugin
+            info "Processing DNS-01 challenge for: $domains"
+
+            # Check for common DNS provider plugins
+            local dns_plugin=""
+
+            if command -v certbot-dns-cloudflare &> /dev/null; then
+                dns_plugin="cloudflare"
+            elif command -v certbot-dns-route53 &> /dev/null; then
+                dns_plugin="route53"
+            elif command -v certbot-dns-digitalocean &> /dev/null; then
+                dns_plugin="digitalocean"
+            fi
+
+            if [ -n "$dns_plugin" ]; then
+                info "Found DNS plugin: $dns_plugin"
+                certbot_cmd+=" --dns-${dns_plugin} --dns-${dns_plugin}-credentials /etc/letsencrypt/${dns_plugin}.ini"
+            else
+                warn "No DNS provider plugin found. DNS-01 requires:"
+                echo "  - Install DNS plugin: sudo apt-get install python3-certbot-dns-<provider>"
+                echo "  - Configure credentials: /etc/letsencrypt/<provider>.ini"
+                echo "  - Or use manual DNS challenge: certbot certonly --manual --preferred-challenges dns"
+                echo ""
+                info "Skipping automatic renewal for $domains"
+                info "To manually renew, run:"
+                echo "  sudo certbot certonly --manual --preferred-challenges dns -d ${domains//,/ -d }"
+                echo "$domains|$challenge|$cert_path|$expiry|$last_renewed|dns-manual-required" >> "$temp_conf"
+                continue
+            fi
         fi
 
         certbot_cmd+=" --non-interactive --agree-tos --email admin@${domain_array[0]}"
@@ -656,6 +681,91 @@ setup_cron() {
     crontab -l | grep sslmgr.sh
 }
 
+setup_dns_plugin() {
+    info "DNS Plugin Setup Assistant"
+    echo ""
+    echo "DNS-01 challenge is required for:"
+    echo "  - Wildcard certificates (*.example.com)"
+    echo "  - Servers without public port 80 access"
+    echo ""
+    echo "Available DNS providers:"
+    echo "  1) Cloudflare"
+    echo "  2) Route53 (AWS)"
+    echo "  3) DigitalOcean"
+    echo "  4) Google Cloud DNS"
+    echo "  5) Other/Manual"
+    echo ""
+    read -p "Select your DNS provider (1-5): " provider_choice
+
+    case $provider_choice in
+        1)
+            info "Cloudflare DNS Plugin Setup"
+            echo ""
+            echo "Installation:"
+            echo "  sudo apt-get install python3-certbot-dns-cloudflare"
+            echo ""
+            echo "Configuration file: /etc/letsencrypt/cloudflare.ini"
+            echo "Create with:"
+            echo "  sudo nano /etc/letsencrypt/cloudflare.ini"
+            echo ""
+            echo "Add the following (get API token from Cloudflare dashboard):"
+            echo "  dns_cloudflare_api_token = YOUR_API_TOKEN"
+            echo ""
+            echo "Set permissions:"
+            echo "  sudo chmod 600 /etc/letsencrypt/cloudflare.ini"
+            echo ""
+            echo "Test:"
+            echo "  sudo certbot certonly --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini -d example.com -d *.example.com"
+            ;;
+        2)
+            info "Route53 (AWS) DNS Plugin Setup"
+            echo ""
+            echo "Installation:"
+            echo "  sudo apt-get install python3-certbot-dns-route53"
+            echo ""
+            echo "Configuration:"
+            echo "  AWS credentials via IAM role, AWS CLI, or /etc/letsencrypt/route53.ini"
+            echo ""
+            echo "Test:"
+            echo "  sudo certbot certonly --dns-route53 -d example.com -d *.example.com"
+            ;;
+        3)
+            info "DigitalOcean DNS Plugin Setup"
+            echo ""
+            echo "Installation:"
+            echo "  sudo apt-get install python3-certbot-dns-digitalocean"
+            echo ""
+            echo "Configuration file: /etc/letsencrypt/digitalocean.ini"
+            echo "  dns_digitalocean_token = YOUR_DO_API_TOKEN"
+            echo ""
+            echo "Set permissions:"
+            echo "  sudo chmod 600 /etc/letsencrypt/digitalocean.ini"
+            ;;
+        4)
+            info "Google Cloud DNS Plugin Setup"
+            echo ""
+            echo "Installation:"
+            echo "  sudo apt-get install python3-certbot-dns-google"
+            echo ""
+            echo "Requires service account JSON key file"
+            ;;
+        5)
+            info "Manual DNS Challenge"
+            echo ""
+            echo "For providers without plugins, use manual mode:"
+            echo "  sudo certbot certonly --manual --preferred-challenges dns -d example.com -d *.example.com"
+            echo ""
+            echo "Certbot will provide DNS TXT records to add to your domain."
+            ;;
+        *)
+            warn "Invalid choice"
+            ;;
+    esac
+
+    echo ""
+    info "After setup, DNS-01 domains will be automatically renewed by this script"
+}
+
 #############################################################################
 # Help and Usage
 #############################################################################
@@ -677,6 +787,7 @@ Options:
   --nginx              Generate nginx configuration files
   --backup             Backup all certificates
   --cron               Setup automatic renewal cron job
+  --dns-setup          Interactive DNS plugin setup assistant
   --verify             Verify certificate installation and accessibility
   --help               Show this help message
 
@@ -700,10 +811,23 @@ EOF
 #############################################################################
 
 main() {
-    # Always check dependencies first
+    # Parse command line arguments
+    case "${1:-}" in
+        --help|"")
+            show_usage
+            exit 0
+            ;;
+        --dns-setup)
+            # DNS setup doesn't need full dependency check
+            setup_dns_plugin
+            exit 0
+            ;;
+    esac
+
+    # Check dependencies for all other commands
     check_dependencies || exit 1
 
-    # Parse command line arguments
+    # Continue parsing remaining commands
     case "${1:-}" in
         --setup)
             setup_domains
@@ -737,9 +861,6 @@ main() {
             ;;
         --verify)
             warn "Verify function not yet implemented"
-            ;;
-        --help|"")
-            show_usage
             ;;
         *)
             error "Unknown option: $1"
